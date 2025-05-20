@@ -32,6 +32,8 @@ import textwrap
 import time
 import typing
 from typing import Protocol, Self, TypeVar, overload
+import gc
+import jax
 
 from absl import app
 from absl import flags
@@ -50,7 +52,6 @@ from alphafold3.model.components import base_model
 from alphafold3.model.components import utils
 from alphafold3.model.diffusion import model as diffusion_model
 import haiku as hk
-import jax
 from jax import numpy as jnp
 import numpy as np
 
@@ -77,6 +78,18 @@ _OUTPUT_DIR = flags.DEFINE_string(
     'output_dir',
     None,
     'Path to a directory where the results will be saved.',
+)
+
+# Add batch processing arguments
+_BATCH_JSON_DIR = flags.DEFINE_string(
+    'batch_json_dir',
+    None,
+    'Path to directory containing multiple JSON files for batch processing.',
+)
+_BATCH_H5_DIR = flags.DEFINE_string(
+    'batch_h5_dir',
+    None,
+    'Path to directory containing multiple H5 files for batch processing.',
 )
 
 MODEL_DIR = flags.DEFINE_string(
@@ -205,13 +218,6 @@ _NHMMER_N_CPU = flags.DEFINE_integer(
     min(multiprocessing.cpu_count(), 8),
     'Number of CPUs to use for Nhmmer. Default to min(cpu_count, 8). Going'
     ' beyond 8 CPUs provides very little additional speedup.',
-)
-
-# Compilation cache.
-_JAX_COMPILATION_CACHE_DIR = flags.DEFINE_string(
-    'jax_compilation_cache_dir',
-    None,
-    'Path to a directory for the JAX compilation cache.',
 )
 
 # Compilation buckets.
@@ -388,6 +394,9 @@ class ResultsForSeed:
   full_fold_input: folding_input.Input
 
 
+# Define a global CCD variable at the module level
+global_ccd = None
+
 def predict_structure(
     fold_input: folding_input.Input,
     model_runner: ModelRunner,
@@ -395,12 +404,18 @@ def predict_structure(
     init_guess: bool = True,
     path: str = '',
     num_samples: int = 5,
+    global_ccd = None,  # Add global CCD parameter
 ) -> Sequence[ResultsForSeed]:
   """Runs the full inference pipeline to predict structures for each seed."""
 
   print(f'Featurising data for seeds {fold_input.rng_seeds}...')
   featurisation_start_time = time.time()
-  ccd = chemical_components.cached_ccd(user_ccd=fold_input.user_ccd)
+  
+  # Use global CCD if provided, otherwise create a new one
+  ccd = global_ccd
+  if ccd is None:
+    ccd = chemical_components.cached_ccd(user_ccd=fold_input.user_ccd)
+    
   featurised_examples = featurisation.featurise_input(
       fold_input=fold_input, buckets=buckets, ccd=ccd, verbose=True
   )
@@ -556,6 +571,7 @@ def process_fold_input(
     init_guess: bool = True,
     path: str = '',
     num_samples: int = 5,
+    global_ccd = None,  # Add global CCD parameter
 ) -> folding_input.Input | Sequence[ResultsForSeed]:
   """Runs data pipeline and/or inference on a single fold input.
 
@@ -611,7 +627,8 @@ def process_fold_input(
         buckets=buckets,
         init_guess=init_guess,
         path=path,
-        num_samples=num_samples 
+        num_samples=num_samples,
+        global_ccd=global_ccd  # Pass global CCD
     )
     print(
         f'Writing outputs for {fold_input.name} for seed(s)'
@@ -629,14 +646,20 @@ def process_fold_input(
 
 
 def main(_):
-  if _JAX_COMPILATION_CACHE_DIR.value is not None:
-    jax.config.update(
-        'jax_compilation_cache_dir', _JAX_COMPILATION_CACHE_DIR.value
-    )
-
-  if _JSON_PATH.value is None == _INPUT_DIR.value is None:
+  # Check for batch processing mode
+  batch_mode = (_BATCH_JSON_DIR.value is not None and _BATCH_H5_DIR.value is not None)
+  single_mode = (_JSON_PATH.value is not None or _INPUT_DIR.value is not None)
+  
+  if batch_mode and single_mode:
     raise ValueError(
-        'Exactly one of --json_path or --input_dir must be specified.'
+        'Cannot use batch mode (--batch_json_dir and --batch_h5_dir) and single mode '
+        '(--json_path or --input_dir) at the same time.'
+    )
+  
+  if not batch_mode and not single_mode:
+    raise ValueError(
+        'Must specify either batch mode (--batch_json_dir and --batch_h5_dir) or '
+        'single mode (--json_path or --input_dir).'
     )
 
   if not _RUN_INFERENCE.value and not _RUN_DATA_PIPELINE.value:
@@ -645,18 +668,37 @@ def main(_):
         ' set to true.'
     )
 
-  if _INPUT_DIR.value is not None:
-    fold_inputs = folding_input.load_fold_inputs_from_dir(
-        pathlib.Path(_INPUT_DIR.value)
-    )
-  elif _JSON_PATH.value is not None:
-    fold_inputs = folding_input.load_fold_inputs_from_path(
-        pathlib.Path(_JSON_PATH.value)
-    )
+  # Process in single mode
+  if single_mode:
+    if _JSON_PATH.value is None == _INPUT_DIR.value is None:
+      raise ValueError(
+          'Exactly one of --json_path or --input_dir must be specified in single mode.'
+      )
+
+    if _INPUT_DIR.value is not None:
+      fold_inputs = folding_input.load_fold_inputs_from_dir(
+          pathlib.Path(_INPUT_DIR.value)
+      )
+    elif _JSON_PATH.value is not None:
+      fold_inputs = folding_input.load_fold_inputs_from_path(
+          pathlib.Path(_JSON_PATH.value)
+      )
+  # Process in batch mode
   else:
-    raise AssertionError(
-        'Exactly one of --json_path or --input_dir must be specified.'
-    )
+    # Check if directories exist
+    if not os.path.isdir(_BATCH_JSON_DIR.value):
+      raise ValueError(f'Batch JSON directory does not exist: {_BATCH_JSON_DIR.value}')
+    if not os.path.isdir(_BATCH_H5_DIR.value):
+      raise ValueError(f'Batch H5 directory does not exist: {_BATCH_H5_DIR.value}')
+    
+    # Get all JSON files from the batch directory
+    batch_json_files = [f for f in os.listdir(_BATCH_JSON_DIR.value) if f.endswith('.json')]
+    if not batch_json_files:
+      raise ValueError(f'No JSON files found in {_BATCH_JSON_DIR.value}')
+    
+    print(f'Found {len(batch_json_files)} JSON files for batch processing')
+    
+    # We'll process each JSON file individually later
 
   # Make sure we can create the output directory before running anything.
   try:
@@ -733,21 +775,64 @@ def main(_):
     print('Skipping running model inference.')
     model_runner = None
 
-  print(f'Processing {len(fold_inputs)} fold inputs.')
-  for fold_input in fold_inputs:
-    init_file = 'test'
-    process_fold_input(
-        fold_input=fold_input,
-        data_pipeline_config=data_pipeline_config,
-        model_runner=model_runner,
-        output_dir=os.path.join(_OUTPUT_DIR.value, fold_input.sanitised_name()),
-        buckets=tuple(int(bucket) for bucket in _BUCKETS.value),
-        init_guess=_INIT_GUESS.value,
-        path=_INIT_PATH.value,
-        num_samples=_NUM_SAMPLES.value 
-    )
+  if batch_mode:
+    # Load global CCD only once for all inputs
+    print("Loading chemical component dictionary (CCD) once for all inputs...")
+    global_ccd = chemical_components.cached_ccd(user_ccd=None)
+    
+    # Process each JSON file in batch mode
+    print(f'Processing {len(batch_json_files)} files in batch mode')
+    for json_file in batch_json_files:
+      json_path = os.path.join(_BATCH_JSON_DIR.value, json_file)
+      base_name = os.path.splitext(os.path.basename(json_file))[0]
+      
+      # Look for matching H5 file
+      h5_file = f"{base_name}.h5"
+      h5_path = os.path.join(_BATCH_H5_DIR.value, h5_file)
+      
+      if not os.path.exists(h5_path):
+        print(f"Warning: No matching H5 file found for {json_file}. Skipping...")
+        continue
+      
+      print(f"Processing {base_name} (JSON: {json_file}, H5: {h5_file})")
+      
+      # Load the fold input
+      fold_inputs = folding_input.load_fold_inputs_from_path(pathlib.Path(json_path))
+      
+      # Process each fold input
+      for fold_input in fold_inputs:
+        output_subdir = os.path.join(_OUTPUT_DIR.value, fold_input.sanitised_name())
+        process_fold_input(
+            fold_input=fold_input,
+            data_pipeline_config=data_pipeline_config,
+            model_runner=model_runner,
+            output_dir=output_subdir,
+            buckets=tuple(int(bucket) for bucket in _BUCKETS.value),
+            init_guess=_INIT_GUESS.value,
+            path=h5_path,
+            num_samples=_NUM_SAMPLES.value,
+            global_ccd=global_ccd  # Pass global CCD
+        )
+        
+        jax.clear_caches()  # Clear JAX caches
+        gc.collect()  # Trigger Python garbage collection
+        
+  else:
+    # Single mode processing
+    print(f'Processing {len(fold_inputs)} fold inputs in single mode.')
+    for fold_input in fold_inputs:
+      process_fold_input(
+          fold_input=fold_input,
+          data_pipeline_config=data_pipeline_config,
+          model_runner=model_runner,
+          output_dir=os.path.join(_OUTPUT_DIR.value, fold_input.sanitised_name()),
+          buckets=tuple(int(bucket) for bucket in _BUCKETS.value),
+          init_guess=_INIT_GUESS.value,
+          path=_INIT_PATH.value,
+          num_samples=_NUM_SAMPLES.value 
+      )
 
-  print(f'Done processing {len(fold_inputs)} fold inputs.')
+  print('All processing completed successfully.')
 
 
 if __name__ == '__main__':

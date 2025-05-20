@@ -79,8 +79,8 @@ def generate_json_files(csv_path, output_dir, cif_dir):
             "userCCD": None
         }
         
-        # Generate output file name
-        output_filename = f"{complex_name}_data.json"
+        # Generate output file name - REMOVED _data suffix
+        output_filename = f"{complex_name}.json"  # Removed _data suffix to match H5 filename
         output_path = os.path.join(output_dir, output_filename)
         
         # Write JSON file
@@ -96,6 +96,6 @@ def generate_json_files(csv_path, output_dir, cif_dir):
 if __name__ == "__main__":
     csv_path = "./complex_chain_sequences.csv"  # Path to the CSV file just generated
     output_dir = "./complex_json_files"         # Output directory for JSON files
-    cif_dir = "/your_path_to_cif_files/"          # Directory where CIF files are located
+    cif_dir = "/lustre/grp/cmclab/liuyu/design/AF3Score/example/complex_chain_cifs"          # Directory where CIF files are located
     
     generate_json_files(csv_path, output_dir, cif_dir)
