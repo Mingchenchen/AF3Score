@@ -92,9 +92,9 @@ def get_metrics_from_json(base_path, target, description):
                                  if chain != "A" and res_id in interface_B]
             chain_A_indices = [i for i, chain in enumerate(token_chain_ids) if chain == "A"]
             chain_B_indices = [i for i, chain in enumerate(token_chain_ids) if chain != "A"]
-            ipae = np.mean(pae_matrix[np.ix_(interface_A_indices, interface_B_indices)])
+            ipae = np.mean([pae_matrix[np.ix_(interface_A_indices, interface_B_indices)], pae_matrix[np.ix_(interface_B_indices, interface_A_indices)]])
             monomer_pae = np.mean(pae_matrix[np.ix_(chain_A_indices, chain_A_indices)])
-            pae_interaction = np.mean(pae_matrix[np.ix_(chain_A_indices, chain_B_indices)])
+            pae_interaction = np.mean([pae_matrix[np.ix_(chain_A_indices, chain_B_indices)], pae_matrix[np.ix_(chain_B_indices, chain_A_indices)]])
             complex_pae = np.mean(pae_matrix)
             
         return {
