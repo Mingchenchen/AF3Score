@@ -8,7 +8,7 @@ A pipeline for evaluating protein structure quality using AF3Score.
 ```bash
 conda create -n af3score python=3.11
 conda activate af3score
-conda install gxx linux-64 gxx_impl linux-64 gcc linux-64 gcc_impl linux-64-13.2.0
+conda install gxx_linux-64 gxx_impl_linux-64 gcc_linux-64 gcc_impl_linux-64=13.2.0
 ```
 
 ### 2. Install HMMER (Required for MSA Generation)
