@@ -199,7 +199,7 @@ def load_traced_array(load_path: str) -> Tuple[jax.Array, int, Dict]:
     # Ensure file extension is .h5
     if not load_path.endswith('.h5'):
         load_path = load_path + '.h5'
-        
+        print('debug:load_path ',load_path)
     with h5py.File(load_path, 'r') as f:
         # Load main array
         numpy_array = f['coordinates'][:]
@@ -327,17 +327,18 @@ class Diffuser(hk.Module):
       embeddings, _ = hk.fori_loop(0, num_iter, recycle_body, (embeddings, key))
     
     if init_guess:
+      print('debug: path', path)
       loaded_array, _, _ = load_traced_array(path)
       num_samples = self.config.heads.diffusion.eval.num_samples
       mask = batch.predicted_structure_info.atom_mask
       final_dense_atom_mask = jnp.tile(mask[None], (num_samples, 1, 1))
       
       
-      # AF3Score
+      #AF3Score
       samples = {'atom_positions': loaded_array, 'mask': final_dense_atom_mask}
-      
 
- 
+
+    # # ppiflow
     #   samples = self._sample_diffusion(
     #     batch,
     #     embeddings,
@@ -516,6 +517,19 @@ class Diffuser(hk.Module):
           fraction_disordered_=fraction_disordered[idx],
           has_clash_=has_clash[idx],
       )
+      print("ranking_score:",ranking_score)
+      print("iptm:",iptm[idx])
+      ##########################################################
+      # Chain pair iptm is a matrix of pairwise iptm scores
+      # for each chain pair, so we can print it out for log.
+      chain_pair_iptm_matrix = chain_pair_iptm[idx]
+      is_3x3_ndarray = (
+        isinstance(chain_pair_iptm_matrix, np.ndarray)
+        and chain_pair_iptm_matrix.shape == (3, 3)
+      )
+      if is_3x3_ndarray:
+        print(f"iptm_HA: {chain_pair_iptm_matrix[0, 2]}")
+      ##########################################################
       yield base_model.InferenceResult(
           predicted_structure=pred_structure,
           numerical_data={
@@ -550,6 +564,8 @@ class Diffuser(hk.Module):
           },
           model_id=result['__identifier__'],
       )
+
+    
 
 
 class Evoformer(hk.Module):

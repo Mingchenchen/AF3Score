@@ -217,6 +217,8 @@ class DataPipelineConfig:
   nhmmer_n_cpu: int = 8
 
 
+
+
 class DataPipeline:
   """Runs the alignment tools and assembles the input features."""
 
@@ -377,6 +379,12 @@ class DataPipeline:
     has_paired_msa = chain.paired_msa is not None
     has_templates = chain.templates is not None
 
+    print("💡 Entered process_protein_chain()")
+    print(f"unpaired_msa: {chain.unpaired_msa}")
+    print(f"paired_msa: {chain.paired_msa}")
+    print(f"templates: {chain.templates}")
+
+
     if has_unpaired_msa or has_paired_msa or has_templates:
       if not has_unpaired_msa or not has_paired_msa or not has_templates:
         raise ValueError(
@@ -391,6 +399,7 @@ class DataPipeline:
           'already has MSAs and templates.',
           chain.id,
       )
+      print(f'Skipping MSA and template search for protein chain %s because it already has MSAs and templates {chain.id}')
       if not chain.unpaired_msa:
         logging.info('Using empty unpaired MSA for protein chain %s', chain.id)
       if not chain.paired_msa:
@@ -405,6 +414,7 @@ class DataPipeline:
       paired_msa = chain.paired_msa or empty_msa
       templates = chain.templates
     else:
+      print('no template')
       unpaired_msa, paired_msa, template_hits = _get_protein_msa_and_templates(
           sequence=chain.sequence,
           uniref90_msa_config=self._uniref90_msa_config,

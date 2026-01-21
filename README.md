@@ -11,7 +11,26 @@ conda activate af3score
 conda install gxx_linux-64 gxx_impl_linux-64 gcc_linux-64 gcc_impl_linux-64=13.2.0
 ```
 
-### 2. Install HMMER (Required for MSA Generation)
+
+### 2. Install AF3Score and Dependencies
+```bash
+git clone https://github.com/Mingchenchen/AF3Score.git
+cd AF3Score/
+
+# Download required databases
+bash fetch_databases.sh <DB_DIR>  # Replace <DB_DIR> with your database directory
+
+# Install Python dependencies
+pip install -r dev-requirements.txt
+pip install --no-deps -e .
+build_data
+
+# Install additional dependencies
+conda install -c conda-forge biopython h5py pandas
+```
+
+
+### 3. Optional Install HMMER (Required for MSA Generation)
 ```bash
 mkdir ~/hmmer_build ~/hmmer
 wget http://eddylab.org/software/hmmer/hmmer-3.4.tar.gz -P ~/hmmer_build
@@ -33,115 +52,52 @@ Verify installation:
 hmmsearch -h
 ```
 
-### 3. Install AF3Score and Dependencies
-```bash
-git clone https://github.com/Mingchenchen/AF3Score.git
-cd AF3Score/
-
-# Download required databases
-bash fetch_databases.sh <DB_DIR>  # Replace <DB_DIR> with your database directory
-
-# Install Python dependencies
-pip install -r dev-requirements.txt
-pip install --no-deps -e .
-build_data
-
-# Install additional dependencies
-conda install -c conda-forge biopython h5py pandas
-```
-
 ## Usage Pipeline
 
-### 1. Extract Chains and Generate CIF Files
+The **AF3Score pipeline** is designed for high-throughput evaluation of protein structures. It consists of two primary scripts tailored for single-batch or multi-batch processing on high-performance computing (HPC) clusters.
+
+### 1. Main Pipeline Script
+
+`AF3score_pipeline.sh` is the core utility used to process a single directory of PDB files.
+
+**Usage:**
+
+Before running the pipeline on a shell cluster, you must configure the variables within `AF3score_pipeline.sh`.
+
+| Variable | Description | Example Value |
+| --- | --- | --- |
+| `PYTHON_EXEC` | Path to the specific Conda environment Python binary. | `~/anaconda3/envs/af3score/bin/python` |
+| `slurm_partition` | Target GPU partitions for job submission. | `gpu1,gpu2` |
+| `slurm_nodelist` | Specific nodes assigned for the computation. | `c06b14n[05-06],c06b19n[05-06]` |
+
+Run the pipeline:
 ```bash
-python 1_extract_chains.py
-```
-**Input**: PDB files in `./pdb` directory  
-**Output**: 
-- Individual chain CIF files in `./complex_chain_cifs/`
-- Sequence information in `complex_chain_sequences.csv`
+./AF3score_pipeline.sh <input_pdb_dir> <output_dir> <num_jobs>
 
-### 2. Convert PDB to JAX Arrays
-```bash
-python 2_pdb2jax.py
-```
-**Input**: PDB files in `./pdb` directory  
-**Output**: H5 files in `./complex_h5/`
-
-### 3. Generate Configuration Files
-```bash
-python 3_generate_json.py
-```
-**Input**: `complex_chain_sequences.csv`  
-**Output**: JSON configuration files in `./complex_json_files/`
-
-### 4. Run AlphaFold3 Scoring
-
-AlphaFold3 scoring can be run in two modes: single file mode or batch mode.
-
-#### Single File Mode
-
-Use this mode when you want to process a single protein structure:
-
-```bash
-python run_af3score.py \
-  --db_dir=/path/to/alphafold_databases \
-  --model_dir=/path/to/alphafold3_model_parameters \
-  --json_path=/path/to/complex_json_files/your_protein.json \
-  --path=/path/to/complex_h5/your_protein.h5 \
-  --output_dir=/path/to/score_results/ \
-  --run_data_pipeline=False \
-  --run_inference=true \
-  --init_guess=true \
-  --num_samples=1
 ```
 
-#### Batch Mode
+* **`<input_pdb_dir>`**: Path to the directory containing your input `.pdb` files.
+* **`<output_dir>`**: Target directory where AF3Score metrics and results will be saved.
+* **`<num_jobs>`**: The number of parallel jobs to launch.
 
-Use this mode to process multiple protein structures at once:
+### 2. Batch Processing
 
-```bash
-python run_af3score.py \
-  --db_dir=/path/to/alphafold_databases \
-  --model_dir=/path/to/alphafold3_model_parameters \
-  --batch_json_dir=/path/to/complex_json_files/ \
-  --batch_h5_dir=/path/to/complex_h5/ \
-  --output_dir=/path/to/score_results/ \
-  --run_data_pipeline=False \
-  --run_inference=true \
-  --init_guess=true \
-  --num_samples=1
-```
+For users handling multiple datasets across several directories, use the multi-directory wrapper `AF3score_mutildir.sh`.
 
-**Important Notes:**
-- In batch mode, JSON and H5 files must have matching filenames (e.g., `protein1.json` and `protein1.h5`)
-- You cannot use both modes simultaneously (e.g., specify both `--json_path` and `--batch_json_dir`)
-- Batch mode efficiently processes multiple structures by loading the chemical component dictionary (CCD) only once
-
-## Computational Efficiency
-
-Our method consists of two main stages: data preprocessing and model inference. The preprocessing stage runs on CPU and includes two steps: structure processing and coordinate conversion. These CPU-based steps are computationally efficient, taking less than 0.3 seconds combined even for proteins with 1024 residues. For the model inference stage, which runs on GPU (NVIDIA GeForce RTX 4090), the computational time scales with protein sequence length, ranging from 20 seconds for proteins with 256 residues to 60 seconds for those with 1024 residues.
-
-### 5. Extract Scoring Metrics
-```bash
-python 4_extract_iptm-ipae-pae-interaction.py
-```
 
 ## Output Metrics
 
 The pipeline generates the following scoring metrics:
 
-| Metric | Description |
-|--------|-------------|
-| AF3Score_monomer_ca_plddt | pLDDT value for monomer CA atoms |
-| AF3Score_monomer_pae | PAE value for monomers |
-| AF3Score_monomer_ptm | PTM value for monomers |
-| AF3Score_complex_ca_plddt | pLDDT value for complex CA atoms |
-| AF3Score_complex_pae | PAE value for complexes |
-| AF3Score_complex_ptm | PTM value for complexes |
-| AF3Score_complex_iptm | iPTM value for complexes |
-| AF3Score_pae_interaction | PAE value for interaction chains |
-| AF3Score_ipae | PAE value for interfaces |
+| Metric | Level | Description |
+| --- | --- | --- |
+| **pTM** | Global / Per-chain | **Predicted TM-score:** Measures the overall topological accuracy of the global structure. |
+| **ipTM** | Global / Inter-chain | **Interface pTM:** Assesses the accuracy of the interfaces between different protein chains. |
+| **pLDDT** | Per-residue / Per-chain | **Predicted Local Distance Difference Test:** A per-residue confidence score (0-100). Higher values indicate higher local structure stability. |
+| **PAE** | Per-chain | **Predicted Aligned Error:** The expected distance error (in Å) between pairs of residues. Lower values indicate higher confidence in relative positioning. |
+| **ipSAE** | Inter-chain | **interaction prediction Score from Aligned Errors:** Specifically focuses on the binding interface of two chains. |
+
+Global level metrics are evaluates the quality of the overall structure. Per-chain metrics are focused on the quality of individual chains. Inter-chain metrics are designed to assess the quality of the docking between two chains.
 
 ## Reference
 

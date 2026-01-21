@@ -54,6 +54,7 @@ from alphafold3.model.diffusion import model as diffusion_model
 import haiku as hk
 from jax import numpy as jnp
 import numpy as np
+from model_manager_correct import get_optimized_runner, OptimizedModelRunner
 
 
 
@@ -251,6 +252,50 @@ _NUM_SAMPLES = flags.DEFINE_integer(
     'Number of samples to generate for each prediction.',
 )
 
+# Output file control parameters
+_WRITE_CIF_MODEL = flags.DEFINE_bool(
+    'write_cif_model',
+    True,
+    'Whether to write model.cif files in sample directories.',
+)
+
+_WRITE_SUMMARY_CONFIDENCES = flags.DEFINE_bool(
+    'write_summary_confidences', 
+    True,
+    'Whether to write summary_confidences.json files in sample directories.',
+)
+
+_WRITE_FULL_CONFIDENCES = flags.DEFINE_bool(
+    'write_full_confidences',
+    True, 
+    'Whether to write confidences.json files in sample directories.',
+)
+
+# Control other optional outputs
+_WRITE_BEST_MODEL_ROOT = flags.DEFINE_bool(
+    'write_best_model_root',
+    False,
+    'Whether to write best model files to root output directory.',
+)
+
+_WRITE_RANKING_SCORES_CSV = flags.DEFINE_bool(
+    'write_ranking_scores_csv',
+    False,
+    'Whether to write ranking_scores.csv file.',
+)
+
+_WRITE_TERMS_OF_USE_FILE = flags.DEFINE_bool(
+    'write_terms_of_use_file',
+    False,
+    'Whether to write TERMS_OF_USE.md files.',
+)
+
+_WRITE_FOLD_INPUT_JSON_FILE = flags.DEFINE_bool(
+    'write_fold_input_json_file',
+    False,
+    'Whether to write fold input JSON file.',
+)
+
 
 class ConfigurableModel(Protocol):
   """A model with a nested config class."""
@@ -287,95 +332,20 @@ def make_model_config(
   return config
 
 
-class ModelRunner:
-  """Helper class to run structure prediction stages."""
+class ModelRunner(OptimizedModelRunner):
+    """Use optimized ModelRunner"""
+    
+    def __init__(self, model_class, config, device, model_dir):
+        # Use global singleton pattern
+        global _global_runner
+        if _global_runner is None:
+            _global_runner = OptimizedModelRunner(model_class, config, device, model_dir)
+        
+        # Copy attributes from global instance
+        self.__dict__.update(_global_runner.__dict__)
 
-  def __init__(
-      self,
-      model_class: ConfigurableModel,
-      config: base_config.BaseConfig,
-      device: jax.Device,
-      model_dir: pathlib.Path,
-  ):
-    self._model_class = model_class
-    self._model_config = config
-    self._device = device
-    self._model_dir = model_dir
-
-  @functools.cached_property
-  def model_params(self) -> hk.Params:
-    """Loads model parameters from the model directory."""
-    return params.get_model_haiku_params(model_dir=self._model_dir)
-
-  @functools.cached_property
-  def _model(
-      self,
-  ) -> Callable[[jnp.ndarray, features.BatchDict, bool, str], base_model.ModelResult]: # Add init_guess and path
-    """Loads model parameters and returns a jitted model forward pass."""
-    assert isinstance(self._model_config, self._model_class.Config)
-
-    @hk.transform # Transform regular function into 1. init (for parameter initialization) 2. apply (for forward pass)
-    def forward_fn(batch, init_guess=True, path='', num_samples=5):
-        result = self._model_class(self._model_config)(
-            batch, 
-            init_guess=init_guess, 
-            path=path,
-            num_samples=num_samples
-        )
-        result['__identifier__'] = self.model_params['__meta__']['__identifier__']
-        return result
-
-    return functools.partial(
-        jax.jit(
-          forward_fn.apply, # Function to compile
-          device=self._device, # jit parameters
-          static_argnames=('init_guess', 'path', 'num_samples')  # jit parameters, both need to be marked as static
-          ), 
-          self.model_params # partial sets self.model_params as first parameter of compiled_fn
-    )
-
-  def run_inference(
-      self, 
-      featurised_example: features.BatchDict, 
-      rng_key: jnp.ndarray,
-      init_guess: bool = True,
-      path: str = '',
-      num_samples: int = 5,
-  ) -> base_model.ModelResult:
-    """Computes a forward pass of the model on a featurised example."""
-    featurised_example = jax.device_put(
-        jax.tree_util.tree_map(
-            jnp.asarray, utils.remove_invalidly_typed_feats(featurised_example)
-        ),
-        self._device,
-    )
-    result = self._model(
-        rng_key, 
-        featurised_example, 
-        init_guess, 
-        path,
-        num_samples 
-    )
-    result = jax.tree.map(np.asarray, result)
-    result = jax.tree.map(
-        lambda x: x.astype(jnp.float32) if x.dtype == jnp.bfloat16 else x,
-        result,
-    )
-    result['__identifier__'] = result['__identifier__'].tobytes()
-    return result
-
-  def extract_structures(
-      self,
-      batch: features.BatchDict,
-      result: base_model.ModelResult,
-      target_name: str,
-  ) -> list[base_model.InferenceResult]:
-    """Generates structures from model outputs."""
-    return list(
-        self._model_class.get_inference_result(
-            batch=batch, result=result, target_name=target_name
-        )
-    )
+# Add global variable
+_global_runner = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -408,7 +378,6 @@ def predict_structure(
 ) -> Sequence[ResultsForSeed]:
   """Runs the full inference pipeline to predict structures for each seed."""
 
-  print(f'Featurising data for seeds {fold_input.rng_seeds}...')
   featurisation_start_time = time.time()
   
   # Use global CCD if provided, otherwise create a new one
@@ -419,15 +388,9 @@ def predict_structure(
   featurised_examples = featurisation.featurise_input(
       fold_input=fold_input, buckets=buckets, ccd=ccd, verbose=True
   )
-  print(
-      f'Featurising data for seeds {fold_input.rng_seeds} took '
-      f' {time.time() - featurisation_start_time:.2f} seconds.'
-  )
-  all_inference_start_time = time.time()
+  
   all_inference_results = []
   for seed, example in zip(fold_input.rng_seeds, featurised_examples):
-    print(f'Running model inference for seed {seed}...')
-    inference_start_time = time.time()
     rng_key = jax.random.PRNGKey(seed)
     result = model_runner.run_inference(
         example, 
@@ -436,18 +399,8 @@ def predict_structure(
         path=path,
         num_samples=num_samples 
     )
-    print(
-        f'Running model inference for seed {seed} took '
-        f' {time.time() - inference_start_time:.2f} seconds.'
-    )
-    print(f'Extracting output structures (one per sample) for seed {seed}...')
-    extract_structures = time.time()
     inference_results = model_runner.extract_structures(
         batch=example, result=result, target_name=fold_input.name
-    )
-    print(
-        f'Extracting output structures (one per sample) for seed {seed} took '
-        f' {time.time() - extract_structures:.2f} seconds.'
     )
     all_inference_results.append(
         ResultsForSeed(
@@ -456,15 +409,6 @@ def predict_structure(
             full_fold_input=fold_input,
         )
     )
-    print(
-        'Running model inference and extracting output structures for seed'
-        f' {seed} took  {time.time() - inference_start_time:.2f} seconds.'
-    )
-  print(
-      'Running model inference and extracting output structures for seeds'
-      f' {fold_input.rng_seeds} took '
-      f' {time.time() - all_inference_start_time:.2f} seconds.'
-  )
   return all_inference_results
 
 
@@ -480,6 +424,26 @@ def write_fold_input_json(
     f.write(fold_input.to_json())
 
 
+def write_selective_output(
+    inference_result: base_model.InferenceResult,
+    output_dir: os.PathLike[str] | str,
+) -> None:
+  """Selectively write inference result to directory."""
+  processed_result = post_processing.post_process_inference_result(inference_result)
+  
+  if _WRITE_CIF_MODEL.value:
+    with open(os.path.join(output_dir, 'model.cif'), 'wb') as f:
+      f.write(processed_result.cif)
+  
+  if _WRITE_SUMMARY_CONFIDENCES.value:
+    with open(os.path.join(output_dir, 'summary_confidences.json'), 'wb') as f:
+      f.write(processed_result.structure_confidence_summary_json)
+  
+  if _WRITE_FULL_CONFIDENCES.value:
+    with open(os.path.join(output_dir, 'confidences.json'), 'wb') as f:
+      f.write(processed_result.structure_full_data_json)
+
+
 def write_outputs(
     all_inference_results: Sequence[ResultsForSeed],
     output_dir: os.PathLike[str] | str,
@@ -490,34 +454,45 @@ def write_outputs(
   max_ranking_score = None
   max_ranking_result = None
 
-  output_terms = (
-      pathlib.Path(alphafold3.cpp.__file__).parent / 'OUTPUT_TERMS_OF_USE.md'
-  ).read_text()
   os.makedirs(output_dir, exist_ok=True)
+  
   for results_for_seed in all_inference_results:
     seed = results_for_seed.seed
     for sample_idx, result in enumerate(results_for_seed.inference_results):
+      # Only create sample directory and write selected files
       sample_dir = os.path.join(output_dir, f'seed-{seed}_sample-{sample_idx}')
       os.makedirs(sample_dir, exist_ok=True)
-      post_processing.write_output(
-          inference_result=result, output_dir=sample_dir
+      
+      # Use custom selective output function
+      write_selective_output(
+          inference_result=result, 
+          output_dir=sample_dir
       )
+      
       ranking_score = float(result.metadata['ranking_score'])
       ranking_scores.append((seed, sample_idx, ranking_score))
       if max_ranking_score is None or ranking_score > max_ranking_score:
         max_ranking_score = ranking_score
         max_ranking_result = result
 
-  if max_ranking_result is not None:  # True iff ranking_scores non-empty.
+  # Optional: write best model to root directory
+  if max_ranking_result is not None and _WRITE_BEST_MODEL_ROOT.value:
+    if _WRITE_TERMS_OF_USE_FILE.value:
+      output_terms = (
+          pathlib.Path(alphafold3.cpp.__file__).parent / 'OUTPUT_TERMS_OF_USE.md'
+      ).read_text()
+    else:
+      output_terms = None
+      
     post_processing.write_output(
         inference_result=max_ranking_result,
         output_dir=output_dir,
-        # The output terms of use are the same for all seeds/samples.
         terms_of_use=output_terms,
         name=job_name,
     )
-    # Save csv of ranking scores with seeds and sample indices, to allow easier
-    # comparison of ranking scores across different runs.
+    
+  # Optional: write ranking scores CSV
+  if _WRITE_RANKING_SCORES_CSV.value and ranking_scores:
     with open(os.path.join(output_dir, 'ranking_scores.csv'), 'wt') as f:
       writer = csv.writer(f)
       writer.writerow(['seed', 'sample', 'ranking_score'])
@@ -611,8 +586,12 @@ def process_fold_input(
     fold_input = pipeline.DataPipeline(data_pipeline_config).process(fold_input)
 
   print(f'Output directory: {output_dir}')
-  print(f'Writing model input JSON to {output_dir}')
-  write_fold_input_json(fold_input, output_dir)
+  if _WRITE_FOLD_INPUT_JSON_FILE.value:
+    print(f'Writing model input JSON to {output_dir}')
+    write_fold_input_json(fold_input, output_dir)
+  else:
+    print('Skipping writing fold input JSON')
+
   if model_runner is None:
     print('Skipping inference...')
     output = fold_input
@@ -760,7 +739,10 @@ def main(_):
     devices = jax.local_devices(backend='gpu')
     print(f'Found local devices: {devices}')
 
-    print('Building model from scratch...')
+    # Key modification: create ModelRunner only once, and it uses global model manager
+    print('Initializing global model manager...')
+    global_init_start = time.time()
+    
     model_runner = ModelRunner(
         model_class=diffusion_model.Diffuser,
         config=make_model_config(
@@ -771,56 +753,73 @@ def main(_):
         device=devices[0],
         model_dir=pathlib.Path(MODEL_DIR.value),
     )
+    
+    global_init_time = time.time() - global_init_start
+    print(f'Global model initialization completed, time taken: {global_init_time:.2f} seconds')
+    
   else:
     print('Skipping running model inference.')
     model_runner = None
 
   if batch_mode:
-    # Load global CCD only once for all inputs
+    # Load global CCD only once
     print("Loading chemical component dictionary (CCD) once for all inputs...")
     global_ccd = chemical_components.cached_ccd(user_ccd=None)
     
-    # Process each JSON file in batch mode
+    # Batch processing: now each inference uses the same compiled model
     print(f'Processing {len(batch_json_files)} files in batch mode')
-    for json_file in batch_json_files:
-      json_path = os.path.join(_BATCH_JSON_DIR.value, json_file)
-      base_name = os.path.splitext(os.path.basename(json_file))[0]
-      
-      # Look for matching H5 file
-      h5_file = f"{base_name}.h5"
-      h5_path = os.path.join(_BATCH_H5_DIR.value, h5_file)
-      
-      if not os.path.exists(h5_path):
-        print(f"Warning: No matching H5 file found for {json_file}. Skipping...")
-        continue
-      
-      print(f"Processing {base_name} (JSON: {json_file}, H5: {h5_file})")
-      
-      # Load the fold input
-      fold_inputs = folding_input.load_fold_inputs_from_path(pathlib.Path(json_path))
-      
-      # Process each fold input
-      for fold_input in fold_inputs:
-        output_subdir = os.path.join(_OUTPUT_DIR.value, fold_input.sanitised_name())
-        process_fold_input(
-            fold_input=fold_input,
-            data_pipeline_config=data_pipeline_config,
-            model_runner=model_runner,
-            output_dir=output_subdir,
-            buckets=tuple(int(bucket) for bucket in _BUCKETS.value),
-            init_guess=_INIT_GUESS.value,
-            path=h5_path,
-            num_samples=_NUM_SAMPLES.value,
-            global_ccd=global_ccd  # Pass global CCD
-        )
+    batch_start_time = time.time()
+    
+    for i, json_file in enumerate(batch_json_files):
+        file_start_time = time.time()
+        json_path = os.path.join(_BATCH_JSON_DIR.value, json_file)
+        base_name = os.path.splitext(os.path.basename(json_file))[0]
         
-        jax.clear_caches()  # Clear JAX caches
-        gc.collect()  # Trigger Python garbage collection
+        # Look for matching H5 file
+        h5_file = f"{base_name}.h5"
+        h5_path = os.path.join(_BATCH_H5_DIR.value, h5_file)
         
+        if not os.path.exists(h5_path):
+            print(f"Warning: No matching H5 file found for {json_file}. Skipping...")
+            continue
+        
+        print(f"Processing {i+1}/{len(batch_json_files)}: {base_name}")
+        
+        # Load the fold input
+        fold_inputs = folding_input.load_fold_inputs_from_path(pathlib.Path(json_path))
+        
+        # Process each fold input - now using compiled model
+        for fold_input in fold_inputs:
+            output_subdir = os.path.join(_OUTPUT_DIR.value, fold_input.sanitised_name())
+            process_fold_input(
+                fold_input=fold_input,
+                data_pipeline_config=data_pipeline_config,
+                model_runner=model_runner,  # Reuse the same model
+                output_dir=output_subdir,
+                buckets=tuple(int(bucket) for bucket in _BUCKETS.value),
+                init_guess=_INIT_GUESS.value,
+                path=h5_path,
+                num_samples=_NUM_SAMPLES.value,
+                global_ccd=global_ccd
+            )
+        
+        file_time = time.time() - file_start_time
+        print(f"Task {base_name} completed in {file_time:.2f}s")
+        
+        # Periodic cache cleanup (optional)
+        if (i + 1) % 10 == 0:
+            _global_runner.clear_cache()
+        
+    total_batch_time = time.time() - batch_start_time
+    avg_time_per_file = total_batch_time / len(batch_json_files)
+    print(f'Batch processing completed, total time: {total_batch_time:.2f} seconds')
+    print(f'Average per file: {avg_time_per_file:.2f} seconds')
+    
   else:
     # Single mode processing
     print(f'Processing {len(fold_inputs)} fold inputs in single mode.')
     for fold_input in fold_inputs:
+      task_start_time = time.time()
       process_fold_input(
           fold_input=fold_input,
           data_pipeline_config=data_pipeline_config,
@@ -831,6 +830,8 @@ def main(_):
           path=_INIT_PATH.value,
           num_samples=_NUM_SAMPLES.value 
       )
+      task_time = time.time() - task_start_time
+      print(f"Task {fold_input.name} completed in {task_time:.2f}s")
 
   print('All processing completed successfully.')
 

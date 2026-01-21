@@ -1,1 +1,0 @@
-src/alphafold3/constants/converters/ccd.pickle filter=lfs diff=lfs merge=lfs -text

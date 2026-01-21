@@ -28,17 +28,10 @@ class StructureConfidenceFullEncoder(json.JSONEncoder):
     super().__init__(**(kwargs | dict(separators=(',', ':'))))
 
   def encode(self, o: 'StructureConfidenceFull'):
-    # Cast to np.float64 before rounding, since casting to Python float will
-    # cast to a 64 bit float, potentially undoing np.float32 rounding.
-    atom_plddts = np.round(
-        np.clip(np.asarray(o.atom_plddts, dtype=np.float64), 0.0, 99.99), 2
-    ).astype(float)
-    contact_probs = np.round(
-        np.clip(np.asarray(o.contact_probs, dtype=np.float64), 0.0, 1.0), 2
-    ).astype(float)
-    pae = np.round(
-        np.clip(np.asarray(o.pae, dtype=np.float64), 0.0, 99.9), 1
-    ).astype(float)
+    # Cast to np.float64 to preserve original precision
+    atom_plddts = np.clip(np.asarray(o.atom_plddts, dtype=np.float64), 0.0, 99.99).astype(float)
+    contact_probs = np.clip(np.asarray(o.contact_probs, dtype=np.float64), 0.0, 1.0).astype(float)
+    pae = np.clip(np.asarray(o.pae, dtype=np.float64), 0.0, 99.9).astype(float)
     return """\
 {
   "atom_chain_ids": %s,
@@ -157,7 +150,7 @@ class AtomConfidence:
       this_confidence = float(struc.atom_b_factor[atom_number])
       as_dict['chain_id'].append(atom['chain_id'])
       as_dict['atom_number'].append(atom_number)
-      as_dict['confidence'].append(round(this_confidence, 2))
+      as_dict['confidence'].append(float(this_confidence))
       as_dict['confidence_category'].append(
           ConfidenceCategory.from_confidence_score(this_confidence)
       )
@@ -235,12 +228,11 @@ class StructureConfidenceSummary:
   def to_json(self) -> str:
     def convert(data):
       if isinstance(data, np.ndarray):
-        # Cast to np.float64 before rounding, since casting to Python float will
-        # cast to a 64 bit float, potentially undoing np.float32 rounding.
-        rounded_data = np.round(data.astype(np.float64), decimals=2).tolist()
+        # Cast to np.float64 to preserve original precision
+        original_data = data.astype(np.float64).tolist()
       else:
-        rounded_data = np.round(data, decimals=2)
-      return rounded_data
+        original_data = data
+      return original_data
 
     return _dump_json(jax.tree.map(convert, dataclasses.asdict(self)), indent=1)
 
