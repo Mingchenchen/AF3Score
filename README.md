@@ -17,9 +17,6 @@ conda install gxx_linux-64 gxx_impl_linux-64 gcc_linux-64 gcc_impl_linux-64=13.2
 git clone https://github.com/Mingchenchen/AF3Score.git
 cd AF3Score/
 
-# Download required databases
-bash fetch_databases.sh <DB_DIR>  # Replace <DB_DIR> with your database directory
-
 # Install Python dependencies
 pip install -r dev-requirements.txt
 pip install --no-deps -e .
@@ -30,7 +27,13 @@ conda install -c conda-forge biopython h5py pandas
 ```
 
 
-### 3. Optional Install HMMER (Required for MSA Generation)
+### 3. (Optional) MSA Generation Setup
+Download Databases:
+```bash
+bash fetch_databases.sh <DB_DIR>  # Replace <DB_DIR> with your database directory
+```
+
+Install HMMER:
 ```bash
 mkdir ~/hmmer_build ~/hmmer
 wget http://eddylab.org/software/hmmer/hmmer-3.4.tar.gz -P ~/hmmer_build
