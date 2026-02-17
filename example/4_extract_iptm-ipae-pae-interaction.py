@@ -175,7 +175,8 @@ def update_sc_file(input_dir, outfile):
             failed_records.append(f"line {result['idx']}: {result['error']}")
     
     # Write failed records to file
-    with open('failed_records.txt', 'w') as f:
+    failed_records_path = os.path.join(os.path.dirname(outfile) if os.path.dirname(outfile) else '.', 'failed_records.txt')
+    with open(failed_records_path, 'w') as f:
         f.write(f"Total processed rows: {len(df)}\n")
         f.write(f"Failed rows: {len(failed_records)}\n\n")
         f.write("Detailed failure records:\n")
@@ -191,7 +192,7 @@ def update_sc_file(input_dir, outfile):
     for metric in metrics_list:
         print(f"Successfully updated {metric} count: {success_count[metric]}")
     print(f"Failed entries: {len(failed_records)}")
-    print(f"Failed records written to: failed_records.txt")
+    print(f"Failed records written to: {failed_records_path}")
 
 def parse_args():
     """Parse command-line arguments"""

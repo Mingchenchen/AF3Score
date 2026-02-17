@@ -123,8 +123,9 @@ def main():
     df = df[cols]
     
     # Save CSV file
-    df.to_csv('complex_chain_sequences.csv', index=False)
-    print("\nSequence information has been saved to complex_chain_sequences.csv")
+    csv_output_path = os.path.join(output_dir_cif, 'complex_chain_sequences.csv')
+    df.to_csv(csv_output_path, index=False)
+    print(f"\nSequence information has been saved to {csv_output_path}")
 
 if __name__ == "__main__":
     main()
