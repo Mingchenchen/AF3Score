@@ -274,12 +274,13 @@ class Diffuser(hk.Module):
 
 
   def __call__(
-      self, 
-      batch: features.BatchDict, 
-      key: jax.Array | None = None, 
+      self,
+      batch: features.BatchDict,
+      key: jax.Array | None = None,
       init_guess: bool = False,
       num_samples: int = 5,
       path: str = '',
+      allow_interchain_templates: bool = False,
   ) -> base_model.ModelResult:
     if path:
       print(f"Using path: {path}")
@@ -302,6 +303,7 @@ class Diffuser(hk.Module):
           prev=prev,
           target_feat=target_feat,
           key=subkey,
+          allow_interchain_templates=allow_interchain_templates,
       )
       embeddings['pair'] = embeddings['pair'].astype(jnp.float32)
       embeddings['single'] = embeddings['single'].astype(jnp.float32)
@@ -699,6 +701,7 @@ class Evoformer(hk.Module):
       pair_activations: jnp.ndarray,
       pair_mask: jnp.ndarray,
       key: jnp.ndarray,
+      allow_interchain_templates: bool = False,
   ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Embeds Templates and merges into pair activations."""
     dtype = pair_activations.dtype
@@ -710,7 +713,12 @@ class Evoformer(hk.Module):
     asym_id = batch.token_features.asym_id
     # Construct a mask such that only intra-chain template features are
     # computed, since all templates are for each chain individually.
-    multichain_mask = (asym_id[:, None] == asym_id[None, :]).astype(dtype)
+    # When allow_interchain_templates=True, use all template information
+    # including inter-chain distances (AF2Rank-style scoring).
+    if allow_interchain_templates:
+      multichain_mask = jnp.ones((asym_id.shape[0], asym_id.shape[0]), dtype=dtype)
+    else:
+      multichain_mask = (asym_id[:, None] == asym_id[None, :]).astype(dtype)
 
     template_fn = functools.partial(template_module, key=subkey)
     template_act = template_fn(
@@ -771,6 +779,7 @@ class Evoformer(hk.Module):
       prev: dict[str, jnp.ndarray],
       target_feat: jnp.ndarray,
       key: jnp.ndarray,
+      allow_interchain_templates: bool = False,
   ) -> dict[str, jnp.ndarray]:
 
     assert self.global_config.bfloat16 in {'all', 'none'}
@@ -808,6 +817,7 @@ class Evoformer(hk.Module):
           pair_activations=pair_activations,
           pair_mask=pair_mask,
           key=key,
+          allow_interchain_templates=allow_interchain_templates,
       )
       pair_activations, key = self._embed_process_msa(
           msa_batch=batch.msa,

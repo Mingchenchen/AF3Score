@@ -251,6 +251,14 @@ _NUM_SAMPLES = flags.DEFINE_integer(
     'Number of samples to generate for each prediction.',
 )
 
+_ALLOW_INTERCHAIN_TEMPLATES = flags.DEFINE_bool(
+    'allow_interchain_templates',
+    False,
+    'Allow inter-chain template information for complex scoring (AF2Rank mode). '
+    'When True, template embeddings include inter-chain distances. '
+    'When False (default), only intra-chain template features are used.',
+)
+
 
 class ConfigurableModel(Protocol):
   """A model with a nested config class."""
@@ -315,12 +323,13 @@ class ModelRunner:
     assert isinstance(self._model_config, self._model_class.Config)
 
     @hk.transform # Transform regular function into 1. init (for parameter initialization) 2. apply (for forward pass)
-    def forward_fn(batch, init_guess=True, path='', num_samples=5):
+    def forward_fn(batch, init_guess=True, path='', num_samples=5, allow_interchain_templates=False):
         result = self._model_class(self._model_config)(
-            batch, 
-            init_guess=init_guess, 
+            batch,
+            init_guess=init_guess,
             path=path,
-            num_samples=num_samples
+            num_samples=num_samples,
+            allow_interchain_templates=allow_interchain_templates,
         )
         result['__identifier__'] = self.model_params['__meta__']['__identifier__']
         return result
@@ -329,18 +338,19 @@ class ModelRunner:
         jax.jit(
           forward_fn.apply, # Function to compile
           device=self._device, # jit parameters
-          static_argnames=('init_guess', 'path', 'num_samples')  # jit parameters, both need to be marked as static
-          ), 
+          static_argnames=('init_guess', 'path', 'num_samples', 'allow_interchain_templates')  # jit parameters, both need to be marked as static
+          ),
           self.model_params # partial sets self.model_params as first parameter of compiled_fn
     )
 
   def run_inference(
-      self, 
-      featurised_example: features.BatchDict, 
+      self,
+      featurised_example: features.BatchDict,
       rng_key: jnp.ndarray,
       init_guess: bool = True,
       path: str = '',
       num_samples: int = 5,
+      allow_interchain_templates: bool = False,
   ) -> base_model.ModelResult:
     """Computes a forward pass of the model on a featurised example."""
     featurised_example = jax.device_put(
@@ -350,11 +360,12 @@ class ModelRunner:
         self._device,
     )
     result = self._model(
-        rng_key, 
-        featurised_example, 
-        init_guess, 
+        rng_key,
+        featurised_example,
+        init_guess,
         path,
-        num_samples 
+        num_samples,
+        allow_interchain_templates,
     )
     result = jax.tree.map(np.asarray, result)
     result = jax.tree.map(
@@ -404,6 +415,7 @@ def predict_structure(
     init_guess: bool = True,
     path: str = '',
     num_samples: int = 5,
+    allow_interchain_templates: bool = False,
     global_ccd = None,  # Add global CCD parameter
 ) -> Sequence[ResultsForSeed]:
   """Runs the full inference pipeline to predict structures for each seed."""
@@ -430,11 +442,12 @@ def predict_structure(
     inference_start_time = time.time()
     rng_key = jax.random.PRNGKey(seed)
     result = model_runner.run_inference(
-        example, 
-        rng_key, 
-        init_guess=init_guess, 
+        example,
+        rng_key,
+        init_guess=init_guess,
         path=path,
-        num_samples=num_samples 
+        num_samples=num_samples,
+        allow_interchain_templates=allow_interchain_templates,
     )
     print(
         f'Running model inference for seed {seed} took '
@@ -571,6 +584,7 @@ def process_fold_input(
     init_guess: bool = True,
     path: str = '',
     num_samples: int = 5,
+    allow_interchain_templates: bool = False,
     global_ccd = None,  # Add global CCD parameter
 ) -> folding_input.Input | Sequence[ResultsForSeed]:
   """Runs data pipeline and/or inference on a single fold input.
@@ -628,6 +642,7 @@ def process_fold_input(
         init_guess=init_guess,
         path=path,
         num_samples=num_samples,
+        allow_interchain_templates=allow_interchain_templates,
         global_ccd=global_ccd  # Pass global CCD
     )
     print(
@@ -811,6 +826,7 @@ def main(_):
             init_guess=_INIT_GUESS.value,
             path=h5_path,
             num_samples=_NUM_SAMPLES.value,
+            allow_interchain_templates=_ALLOW_INTERCHAIN_TEMPLATES.value,
             global_ccd=global_ccd  # Pass global CCD
         )
         
@@ -829,7 +845,8 @@ def main(_):
           buckets=tuple(int(bucket) for bucket in _BUCKETS.value),
           init_guess=_INIT_GUESS.value,
           path=_INIT_PATH.value,
-          num_samples=_NUM_SAMPLES.value 
+          num_samples=_NUM_SAMPLES.value,
+          allow_interchain_templates=_ALLOW_INTERCHAIN_TEMPLATES.value,
       )
 
   print('All processing completed successfully.')
