@@ -1,6 +1,7 @@
 import json
 import pandas as pd
 import os
+import argparse
 
 def format_msa_sequence(sequence):
     """Format MSA sequence"""
@@ -93,9 +94,21 @@ def generate_json_files(csv_path, output_dir, cif_dir):
     
     print(f"\nComplete, generated {json_count} JSON files")
 
+def parse_args():
+    """Parse command-line arguments"""
+    parser = argparse.ArgumentParser(description='Generate JSON files from CSV sequences')
+    parser.add_argument('-c', '--csv_path', type=str, required=True,
+                        help='Path to the CSV file containing chain sequences')
+    parser.add_argument('-i', '--input_dir', type=str, required=True,
+                        help='Input directory containing CIF files')
+    parser.add_argument('-o', '--output_dir', type=str, required=True,
+                        help='Output directory for JSON files')
+    return parser.parse_args()
+
 if __name__ == "__main__":
-    csv_path = "./complex_chain_sequences.csv"  # Path to the CSV file just generated
-    output_dir = "./complex_json_files"         # Output directory for JSON files
-    cif_dir = "/lustre/grp/cmclab/liuyu/design/AF3Score/example/complex_chain_cifs"          # Directory where CIF files are located
-    
+    cmd_args = parse_args()
+    csv_path = cmd_args.csv_path
+    output_dir = cmd_args.output_dir
+    cif_dir = cmd_args.input_dir
+
     generate_json_files(csv_path, output_dir, cif_dir)

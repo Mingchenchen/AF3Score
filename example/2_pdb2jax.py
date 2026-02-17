@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import warnings
 from Bio.PDB.PDBExceptions import PDBConstructionWarning
+import argparse
 
 # Disable Bio.PDB warnings
 warnings.filterwarnings('ignore', category=PDBConstructionWarning)
@@ -306,11 +307,21 @@ def process_pdb_folder(
         except Exception as e:
             print(f"Error processing {os.path.basename(input_path)}: {str(e)}")
 
+def parse_args():
+    """Parse command-line arguments"""
+    parser = argparse.ArgumentParser(description='Convert PDB files to JAX traced arrays in H5 format')
+    parser.add_argument('-i', '--input_dir', type=str, required=True,
+                        help='Input directory containing PDB files')
+    parser.add_argument('-o', '--output_dir', type=str, required=True,
+                        help='Output directory for H5 files')
+    return parser.parse_args()
+
 def main():
     """Main function"""
-    pdb_folder = "./pdb"
-    output_folder = "./complex_h5"
-    
+    cmd_args = parse_args()
+    pdb_folder = cmd_args.input_dir
+    output_folder = cmd_args.output_dir
+
     process_pdb_folder(
         pdb_folder=pdb_folder,
         output_folder=output_folder,

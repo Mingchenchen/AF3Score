@@ -7,6 +7,7 @@ from multiprocessing import Pool, cpu_count
 from functools import partial
 from tqdm import tqdm
 from collections import defaultdict
+import argparse
 
 def get_interface_res_from_cif(cif_file, dist_cutoff=10):
     """Get interface residues from CIF file"""
@@ -117,8 +118,16 @@ def process_row(base_path, row):
     metrics, error = get_metrics_from_json(base_path, target, description)
     return {'idx': row.name, 'metrics': metrics, 'error': error}
 
-def update_sc_file():
-    df = pd.read_csv("subset_data.csv", sep=',', low_memory=False)
+def update_sc_file(input_dir, outfile):
+    """Update CSV file with AF3Score metrics
+
+    Args:
+        input_dir: Directory containing score_results subdirectories
+        outfile: Output CSV file path
+    """
+    # Assume the CSV file is in the input directory
+    csv_file = os.path.join(os.path.dirname(input_dir) if input_dir != "." else ".", "subset_data.csv")
+    df = pd.read_csv(csv_file, sep=',', low_memory=False)
     print("Columns in file:", df.columns.tolist())
 
     if 'target' not in df.columns or 'description' not in df.columns:
@@ -136,9 +145,9 @@ def update_sc_file():
         df[metric] = np.nan
     
     print(f"\nTotal {len(df)} records to process")
-    
+
     # Base path
-    base_path = "./score_results"
+    base_path = input_dir
     
     # Set number of processes
     num_processes = max(1, int(cpu_count() * 0.8))
@@ -174,7 +183,7 @@ def update_sc_file():
             f.write(f"{record}\n")
     
     # Save updated file
-    df.to_csv("subset_data_with_metrics.csv", sep=",", index=False)
+    df.to_csv(outfile, sep=",", index=False)
     
     # Output statistics
     print("\nProcessing completion statistics:")
@@ -184,5 +193,15 @@ def update_sc_file():
     print(f"Failed entries: {len(failed_records)}")
     print(f"Failed records written to: failed_records.txt")
 
+def parse_args():
+    """Parse command-line arguments"""
+    parser = argparse.ArgumentParser(description='Extract iPTM, iPAE, and PAE interaction metrics')
+    parser.add_argument('-i', '--input_dir', type=str, required=True,
+                        help='Input directory containing score_results')
+    parser.add_argument('-o', '--output', type=str, required=True,
+                        help='Output CSV file path')
+    return parser.parse_args()
+
 if __name__ == "__main__":
-    update_sc_file()
+    cmd_args = parse_args()
+    update_sc_file(cmd_args.input_dir, cmd_args.output)

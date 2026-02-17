@@ -6,6 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 import multiprocessing as mp
 from pathlib import Path
+import argparse
 
 # Define dictionary for three-letter to one-letter amino acid conversion
 protein_letters_3to1 = {
@@ -57,15 +58,25 @@ def process_single_pdb(args):
         print(f"\nError processing {input_pdb}: {str(e)}")
         return None, None
 
+def parse_args():
+    """Parse command-line arguments"""
+    parser = argparse.ArgumentParser(description='Extract chains from PDB/CIF files')
+    parser.add_argument('-i', '--input_dir', type=str, required=True,
+                        help='Input directory containing PDB or CIF files')
+    parser.add_argument('-o', '--output_dir', type=str, required=True,
+                        help='Output directory for individual chain CIF files')
+    return parser.parse_args()
+
 def main():
-    input_dir = "./pdb"  # Input directory
-    output_dir_cif = "./complex_chain_cifs"  # CIF output directory
-    
+    cmd_args = parse_args()
+    input_dir = cmd_args.input_dir
+    output_dir_cif = cmd_args.output_dir
+
     # Create output directory
     os.makedirs(output_dir_cif, exist_ok=True)
-    
-    # Get all PDB files
-    pdb_files = list(Path(input_dir).glob("*.pdb"))
+
+    # Get all PDB and CIF files
+    pdb_files = list(Path(input_dir).glob("*.pdb")) + list(Path(input_dir).glob("*.cif"))
     
     # Prepare parameters for process pool
     args = [(str(f), output_dir_cif) for f in pdb_files]
